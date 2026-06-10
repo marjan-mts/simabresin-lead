@@ -23,11 +23,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🌍 سیستم هوشمند استخراج انبوه سرنخ فروش")
-st.info("فایلی حاوی عبارات جستجو (مثلاً لیست شهرها) آپلود کنید یا جستجوی دستی انجام دهید.")
+st.info("فایلی حاوی عبارات جستجو آپلود کنید یا جستجوی دستی انجام دهید.")
 
-# متغیر ذخیره‌سازی داده‌ها در طول سشن
+# افزودن ستون لینکدین به جدول
+columns = ["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links", "LinkedIn"]
+
 if 'master_df' not in st.session_state:
-    st.session_state.master_df = pd.DataFrame(columns=["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links"])
+    st.session_state.master_df = pd.DataFrame(columns=columns)
 
 # --- منوی تنظیمات (سایدبار) ---
 with st.sidebar:
@@ -40,7 +42,7 @@ with st.sidebar:
     start_btn = st.button("🚀 شروع استخراج", type="primary")
     
     if st.button("🗑️ پاکسازی نتایج"):
-        st.session_state.master_df = pd.DataFrame(columns=["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links"])
+        st.session_state.master_df = pd.DataFrame(columns=columns)
         st.rerun()
 
 # --- تابع اسکن هوشمند سایت‌ها ---
@@ -49,17 +51,15 @@ def scan_site(driver, url):
     if not url or url == "ندارد" or "linkedin.com" in url or "google.com" in url: 
         return emails, socials
     try:
-        driver.set_page_load_timeout(15) # محدودیت 15 ثانیه‌ای برای جلوگیری از گیر کردن ربات
+        driver.set_page_load_timeout(15) 
         driver.get(url)
         time.sleep(2)
         src = driver.page_source
         
-        # پیدا کردن ایمیل‌ها با Regex
         found_emails = set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', src))
         valid_emails = [e for e in found_emails if not e.lower().endswith(('.png', '.jpg', '.gif', '.webp'))]
         if valid_emails: emails = " | ".join(valid_emails)
         
-        # پیدا کردن لینک‌های شبکه‌های اجتماعی
         found_socials = set()
         for a in driver.find_elements(By.TAG_NAME, "a"):
             try:
@@ -71,15 +71,37 @@ def scan_site(driver, url):
     except: pass
     return emails, socials
 
+# --- تابع جدید: جستجوی پروفایل لینکدین شرکت ---
+def get_linkedin_url(driver, company_name):
+    linkedin_url = "یافت نشد"
+    if not company_name: 
+        return linkedin_url
+    try:
+        # جستجوی نام شرکت فقط در سایت لینکدین
+        dork = f'"{company_name}" site:linkedin.com/company'
+        driver.get(f"https://www.google.com/search?q={quote_plus(dork)}&hl=en")
+        time.sleep(2) 
+        
+        links = driver.find_elements(By.TAG_NAME, "a")
+        for a in links:
+            try:
+                href = a.get_attribute("href")
+                # یافتن اولین لینکی که مربوط به صفحه شرکت‌ها در لینکدین است
+                if href and "linkedin.com/company/" in href:
+                    linkedin_url = href
+                    break 
+            except: continue
+    except: pass
+    return linkedin_url
+
 # --- منطق اصلی اجرای ربات ---
 if start_btn:
     queries = []
     
-    # پردازش فایل آپلودی یا جستجوی دستی
     if uploaded_file:
         try:
             file_df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
-            queries = file_df.iloc[:, 0].dropna().astype(str).tolist() # خواندن ستون اول فایل
+            queries = file_df.iloc[:, 0].dropna().astype(str).tolist() 
         except Exception as e:
             st.error(f"خطا در خواندن فایل: {e}")
     elif manual_query:
@@ -93,11 +115,10 @@ if start_btn:
         table_placeholder = st.empty()
         
         try:
-            status.info("در حال آماده‌سازی سرور و مرورگر ابری... (ممکن است ۱ دقیقه زمان ببرد)")
+            status.info("در حال آماده‌سازی سرور و مرورگر ابری...")
             
-            # --- تنظیمات مخصوص سرور ابری (Headless) ---
             options = webdriver.ChromeOptions()
-            options.add_argument("--headless=new") # اجرای بدون مانیتور (الزامی برای کلود)
+            options.add_argument("--headless=new") 
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-gpu")
@@ -105,13 +126,14 @@ if start_btn:
             options.add_argument("--disable-blink-features=AutomationControlled")
             options.add_argument("window-size=1920x1080")
             
-            # راه‌اندازی مرورگر
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
             
-            # تب دوم برای اسکن سایت‌ها
-            driver.execute_script("window.open('');")
+            # باز کردن ۳ پنجره (Tab) برای افزایش سرعت و پایداری
+            driver.execute_script("window.open('');") # تب دوم برای اسکن سایت
+            driver.execute_script("window.open('');") # تب سوم برای سرچ لینکدین
             main_window = driver.window_handles[0]
             scan_window = driver.window_handles[1]
+            linkedin_window = driver.window_handles[2]
             
             total_queries = len(queries)
             
@@ -128,7 +150,6 @@ if start_btn:
                     try:
                         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/maps/place/']")))
                         
-                        # اسکرول لیست
                         try:
                             scrollable_div = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
                             for _ in range(int(depth / 5)):
@@ -150,7 +171,7 @@ if start_btn:
                         for place in places_info:
                             driver.switch_to.window(main_window)
                             driver.get(place["url"])
-                            time.sleep(2)
+                            time.sleep(1.5)
                             
                             web, phone = "ندارد", "ندارد"
                             try: web = driver.find_element(By.CSS_SELECTOR, "a[data-item-id='authority']").get_attribute("href")
@@ -162,9 +183,12 @@ if start_btn:
                             if web != "ندارد":
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
+                                
+                            # --- اجرای جستجوی لینکدین ---
+                            driver.switch_to.window(linkedin_window)
+                            linkedin_link = get_linkedin_url(driver, place["name"])
                             
-                            # نمایش زنده داده‌ها
-                            new_row = {"Name": place["name"], "Details": q, "Source": "Google Maps", "Website": web, "Phone": phone, "Email": emails, "Social Links": socials}
+                            new_row = {"Name": place["name"], "Details": q, "Source": "Google Maps", "Website": web, "Phone": phone, "Email": emails, "Social Links": socials, "LinkedIn": linkedin_link}
                             st.session_state.master_df = pd.concat([st.session_state.master_df, pd.DataFrame([new_row])], ignore_index=True)
                             table_placeholder.dataframe(st.session_state.master_df, use_container_width=True)
                             
@@ -199,11 +223,13 @@ if start_btn:
                             
                         for item in urls_to_scan:
                             emails, socials, phone = "یافت نشد", "یافت نشد", "پیام در لینکدین" if "LinkedIn" in source_mode else "بررسی سایت"
+                            linkedin_link = item["url"] if "LinkedIn" in source_mode else "بررسی شود"
+                            
                             if "Web" in source_mode:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, item["url"])
                                 
-                            new_row = {"Name": item["title"], "Details": q, "Source": source_mode.split()[1], "Website": item["url"], "Phone": phone, "Email": emails, "Social Links": socials}
+                            new_row = {"Name": item["title"], "Details": q, "Source": source_mode.split()[1], "Website": item["url"], "Phone": phone, "Email": emails, "Social Links": socials, "LinkedIn": linkedin_link}
                             st.session_state.master_df = pd.concat([st.session_state.master_df, pd.DataFrame([new_row])], ignore_index=True)
                             table_placeholder.dataframe(st.session_state.master_df, use_container_width=True)
 
@@ -220,13 +246,12 @@ if not st.session_state.master_df.empty:
     st.subheader("📊 دیتابیس استخراج شده")
     st.dataframe(st.session_state.master_df, use_container_width=True)
     
-    # تولید فایل اکسل در مموری
     towrite = io.BytesIO()
     st.session_state.master_df.to_excel(towrite, index=False, engine='openpyxl')
     st.download_button(
         label="📥 دانلود دیتابیس اکسل", 
         data=towrite.getvalue(), 
-        file_name="Lead_Gen_Export.xlsx", 
+        file_name="Lead_Gen_Export_with_LinkedIn.xlsx", 
         mime="application/vnd.ms-excel", 
         type="primary"
     )
