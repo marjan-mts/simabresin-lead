@@ -3,7 +3,7 @@ import pandas as pd
 import time
 import re
 import io
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -25,7 +25,7 @@ st.markdown("""
 st.title("🌍 سیستم هوشمند استخراج انبوه سرنخ فروش")
 st.info("فایلی حاوی عبارات جستجو آپلود کنید یا جستجوی دستی انجام دهید.")
 
-# افزودن ستون لینکدین به جدول
+# افزودن ستون‌ها
 columns = ["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links", "LinkedIn"]
 
 if 'master_df' not in st.session_state:
@@ -35,7 +35,7 @@ if 'master_df' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ تنظیمات جستجو")
     uploaded_file = st.file_uploader("آپلود فایل (Excel/CSV):", type=["xlsx", "csv"])
-    manual_query = st.text_input("جستجوی دستی (مثلاً: Paint in Istanbul):", "")
+    manual_query = st.text_input("جستجوی دستی (مثلاً: paint in tehran):", "")
     source_mode = st.radio("منبع استخراج:", ["Google Maps (شرکت‌ها)", "LinkedIn (مدیران/شرکت‌ها)", "Google Web (سایت‌ها)"])
     depth = st.slider("تعداد نتایج در هر عبارت:", 5, 50, 10)
     
@@ -71,28 +71,33 @@ def scan_site(driver, url):
     except: pass
     return emails, socials
 
-# --- تابع جدید: جستجوی پروفایل لینکدین شرکت ---
+# --- تابع جستجوی پروفایل لینکدین شرکت (ارتقا یافته با DuckDuckGo) ---
 def get_linkedin_url(driver, company_name):
-    linkedin_url = "یافت نشد"
     if not company_name: 
-        return linkedin_url
+        return "یافت نشد"
+        
+    clean_name = company_name.replace("Co.", "").replace("Ltd.", "").replace("Inc.", "").strip()
+    
     try:
-        # جستجوی نام شرکت فقط در سایت لینکدین
-        dork = f'"{company_name}" site:linkedin.com/company'
-        driver.get(f"https://www.google.com/search?q={quote_plus(dork)}&hl=en")
+        # استفاده از داک‌داک‌گو برای دور زدن کپچای گوگل
+        dork = f'{clean_name} site:linkedin.com/company'
+        driver.get(f"https://html.duckduckgo.com/html/?q={quote_plus(dork)}")
         time.sleep(2) 
         
         links = driver.find_elements(By.TAG_NAME, "a")
         for a in links:
             try:
                 href = a.get_attribute("href")
-                # یافتن اولین لینکی که مربوط به صفحه شرکت‌ها در لینکدین است
                 if href and "linkedin.com/company/" in href:
-                    linkedin_url = href
-                    break 
+                    if "uddg=" in href:
+                        return unquote(href.split("uddg=")[1].split("&")[0])
+                    return href
             except: continue
     except: pass
-    return linkedin_url
+    
+    # سیستم جایگزین: ساخت لینک جستجوی مستقیم در لینکدین
+    fallback_link = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(clean_name)}"
+    return fallback_link
 
 # --- منطق اصلی اجرای ربات ---
 if start_btn:
@@ -125,12 +130,12 @@ if start_btn:
             options.add_experimental_option("excludeSwitches", ["enable-automation"])
             options.add_argument("--disable-blink-features=AutomationControlled")
             options.add_argument("window-size=1920x1080")
+            options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
             
-            # باز کردن ۳ پنجره (Tab) برای افزایش سرعت و پایداری
-            driver.execute_script("window.open('');") # تب دوم برای اسکن سایت
-            driver.execute_script("window.open('');") # تب سوم برای سرچ لینکدین
+            driver.execute_script("window.open('');") 
+            driver.execute_script("window.open('');") 
             main_window = driver.window_handles[0]
             scan_window = driver.window_handles[1]
             linkedin_window = driver.window_handles[2]
@@ -184,7 +189,7 @@ if start_btn:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
                                 
-                            # --- اجرای جستجوی لینکدین ---
+                            # جستجوی لینکدین
                             driver.switch_to.window(linkedin_window)
                             linkedin_link = get_linkedin_url(driver, place["name"])
                             
@@ -204,21 +209,25 @@ if start_btn:
                         target = "linkedin.com" if "LinkedIn" in source_mode else ""
                         dork = f"{q} site:{target}" if target else q
                         
-                        driver.get(f"https://www.google.com/search?q={quote_plus(dork)}&start={start}&hl=en")
+                        # در حالت وب/لینکدین هم از داک‌داک‌گو برای فرار از کپچا استفاده می‌کنیم
+                        driver.get(f"https://html.duckduckgo.com/html/?q={quote_plus(dork)}&s={start}")
                         time.sleep(3)
                         
                         links = driver.find_elements(By.TAG_NAME, "a")
                         urls_to_scan = []
                         for a in links:
                             try:
-                                link = a.get_attribute("href")
-                                if link and "google.com" not in link and link not in processed_links:
-                                    if "LinkedIn" in source_mode and "linkedin.com" not in link: continue
-                                    title_els = a.find_elements(By.TAG_NAME, "h3")
-                                    if title_els and len(title_els[0].text) > 3:
-                                        processed_links.add(link)
-                                        urls_to_scan.append({"title": title_els[0].text.split("-")[0].strip(), "url": link})
-                                        if len(urls_to_scan) >= depth: break
+                                href = a.get_attribute("href")
+                                if href and "uddg=" in href:
+                                    actual_link = unquote(href.split("uddg=")[1].split("&")[0])
+                                    if "google.com" not in actual_link and actual_link not in processed_links:
+                                        if "LinkedIn" in source_mode and "linkedin.com" not in actual_link: continue
+                                        
+                                        title = a.text
+                                        if title and len(title) > 3:
+                                            processed_links.add(actual_link)
+                                            urls_to_scan.append({"title": title.split("-")[0].strip(), "url": actual_link})
+                                            if len(urls_to_scan) >= depth: break
                             except: continue
                             
                         for item in urls_to_scan:
@@ -251,7 +260,7 @@ if not st.session_state.master_df.empty:
     st.download_button(
         label="📥 دانلود دیتابیس اکسل", 
         data=towrite.getvalue(), 
-        file_name="Lead_Gen_Export_with_LinkedIn.xlsx", 
+        file_name="Lead_Gen_Export.xlsx", 
         mime="application/vnd.ms-excel", 
         type="primary"
     )
