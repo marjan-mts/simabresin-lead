@@ -37,7 +37,7 @@ with st.sidebar:
     st.header("⚙️ تنظیمات جستجو")
     
     # فیلد جدید برای کلید API جمینای
-    gemini_api_key = "AQ.Ab8RN6KKxGnjwIZ7Zxxt1b3EIfuTdOWQR5ccqeE4u_gjz1OftQ"
+    gemini_api_key = st.text_input("🔑 Gemini API Key (برای دقت ۱۰۰٪):", type="password", help="کلید API خود را از Google AI Studio دریافت کنید.")
     
     uploaded_file = st.file_uploader("آپلود فایل (Excel/CSV):", type=["xlsx", "csv"])
     manual_query = st.text_input("جستجوی دستی (مثلاً: paint in tehran):", "")
