@@ -81,7 +81,7 @@ def verify_with_gemini(company_name, search_results, api_key):
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-lite')
+        model = genai.GenerativeModel('gemini-pro')
         
         prompt = f"""
         Role: B2B Lead Generation Expert.
