@@ -42,7 +42,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("آپلود فایل (Excel/CSV):", type=["xlsx", "csv"])
     manual_query = st.text_input("جستجوی دستی (مثلاً: paint in tehran):", "")
     source_mode = st.radio("منبع استخراج:", ["Google Maps (شرکت‌ها)", "LinkedIn (مدیران/شرکت‌ها)", "Google Web (سایت‌ها)"])
-    depth = st.slider("تعداد نتایج در هر عبارت:", 5, 50, 10)
+    depth = st.slider("تعداد نتایج در هر عبارت:", 5, 100, 10)
     
     start_btn = st.button("🚀 شروع استخراج", type="primary")
     
