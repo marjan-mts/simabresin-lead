@@ -79,25 +79,17 @@ def scan_site(driver, url):
 # --- تابع بررسی دقیق با هوش مصنوعی جمینای ---
 def verify_with_gemini(company_name, search_results, api_key):
     try:
+        import google.generativeai as genai
         genai.configure(api_key=api_key)
-        # استفاده از مدل قوی‌تر برای دقت بالاتر
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
-        You are a B2B Lead Generation Expert. 
-        Target Company Name: "{company_name}"
-        Search Results to analyze:
-        {search_results}
-        
-        Instructions:
-        1. Evaluate each result carefully.
-        2. Filter out: Job postings, news articles, personal posts, events, exhibitions, or unrelated organizations (like subways, universities, or schools).
-        3. Identify the URL of the OFFICIAL LinkedIn Company Page for "{company_name}".
-        4. If the title of the result does not strongly match the company name, discard it.
-        5. If you find a valid Company Page URL, output ONLY the URL.
-        6. If no result is a valid LinkedIn Company Page for the target company, output exactly: NOT_FOUND
-        
-        Output only the URL or NOT_FOUND.
+        Role: B2B Lead Generation Expert.
+        Target Company: "{company_name}"
+        Results: {search_results}
+        Task: Find the OFFICIAL LinkedIn Company Page URL. 
+        Discard: Job postings, news, personal profiles, exhibitions, or unrelated organizations.
+        Output: ONLY the URL or NOT_FOUND.
         """
         response = model.generate_content(prompt)
         result = response.text.strip()
@@ -106,6 +98,9 @@ def verify_with_gemini(company_name, search_results, api_key):
             return result
         return None
     except Exception as e:
+        import streamlit as st
+        # این خط باعث می‌شود دلیل اصلی کار نکردن هوش مصنوعی را روی صفحه ببینیم
+        st.error(f"خطای جمینای برای {company_name}: {str(e)}")
         return None
 
 # --- تابع جستجوی پروفایل لینکدین شرکت (ترکیب با AI) ---
