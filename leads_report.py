@@ -34,7 +34,6 @@ if 'master_df' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ تنظیمات جستجو و هوش مصنوعی")
     
-    # انتخاب ارائه‌دهنده و مدل
     ai_provider = st.selectbox("🤖 موتور هوش مصنوعی:", ["Google Gemini", "OpenAI (ChatGPT)"])
     if ai_provider == "Google Gemini":
         ai_model = st.selectbox("نسخه مدل:", ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"])
@@ -53,16 +52,23 @@ with st.sidebar:
         st.session_state.master_df = pd.DataFrame(columns=columns)
         st.rerun()
 
-# --- تابع اسکن هوشمند سایت‌ها ---
+# --- تابع اسکن هوشمند سایت‌ها (تغییر یافته برای خواندن متن سایت) ---
 def scan_site(driver, url):
-    emails, socials = "یافت نشد", "یافت نشد"
+    emails, socials, page_text = "یافت نشد", "یافت نشد", "محتوایی یافت نشد"
     if not url or url == "ندارد" or "linkedin.com" in url or "google.com" in url: 
-        return emails, socials
+        return emails, socials, page_text
     try:
         driver.set_page_load_timeout(10) 
         driver.get(url)
         time.sleep(2)
         src = driver.page_source
+        
+        # استخراج متن سایت برای هوش مصنوعی
+        try:
+            body_element = driver.find_element(By.TAG_NAME, "body")
+            page_text = body_element.text[:1000].replace('\n', ' ') # هزار کاراکتر اول برای فهمیدن زمینه کاری کافیست
+        except:
+            page_text = "متن سایت قابل استخراج نبود."
         
         found_emails = set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', src))
         valid_emails = [e for e in found_emails if not e.lower().endswith(('.png', '.jpg', '.gif', '.webp'))]
@@ -77,7 +83,7 @@ def scan_site(driver, url):
             except: continue
         if found_socials: socials = " | ".join(found_socials)
     except: pass
-    return emails, socials
+    return emails, socials, page_text
 
 # --- تابع دریافت خام اطلاعات جستجو ---
 def get_raw_linkedin_search(driver, company_name):
@@ -119,39 +125,36 @@ def batch_verify_with_ai(df, queue, api_key, provider, model_name, status_elemen
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
         elif provider == "OpenAI (ChatGPT)":
-            # نیاز به اضافه شدن پکیج openai به فایل requirements.txt دارد
             import openai
             openai.api_key = api_key
         
         chunk_size = 5
         total_chunks = (len(queue) + chunk_size - 1) // chunk_size
         
-        # لیستی برای نگهداری ایندکس‌هایی که باید حذف شوند (شرکت‌های نامرتبط)
         indexes_to_drop = []
         
         for i in range(0, len(queue), chunk_size):
             chunk = queue[i:i+chunk_size]
-            status_element.info(f"🤖 در حال ارزیابی تخصصی شرکت‌ها... (گروه {(i//chunk_size)+1} از {total_chunks})")
+            status_element.info(f"🤖 در حال ارزیابی محتوای سایت‌ها و شرکت‌ها... (گروه {(i//chunk_size)+1} از {total_chunks})")
             
             prompt = """Role: B2B Lead Generation & Market Research Expert.
 Your task is to EVALUATE if the found companies actually match the user's TARGET INDUSTRY.
 
 Instructions:
-1. Review each company's raw extracted text against the TARGET INDUSTRY.
-2. If the company is clearly irrelevant (e.g., Target is 'Paint manufacturing' but the company is 'Subway station' or a random news site), you MUST output REJECT.
+1. Carefully read the "Website Content" and "LinkedIn Results" for each company.
+2. If the company is clearly irrelevant to the Target Industry (e.g., Target is 'Paint manufacturing' but the site is about a 'Subway station', news, or unrelated services), you MUST output REJECT.
 3. If the company is relevant, extract their best OFFICIAL Link (Website or LinkedIn).
 4. Output EXACTLY in this format line by line:
 ID: [ID] | STATUS: [MATCH/REJECT] | LINK: https://nextjs.org/docs/app/api-reference/functions/not-found
 """
             for item in chunk:
-                prompt += f"\n---\nID: {item['index']}\nTARGET INDUSTRY/QUERY: {item['query']}\nCOMPANY NAME: {item['company']}\nRAW TEXT/SNIPPET: {item['raw_results']}\n"
+                prompt += f"\n---\nID: {item['index']}\nTARGET INDUSTRY/QUERY: {item['query']}\nCOMPANY NAME: {item['company']}\nEXTRACTED DATA:\n{item['raw_results']}\n"
             
             try:
                 if provider == "Google Gemini":
                     response = model.generate_content(prompt)
                     lines = response.text.strip().split('\n')
                 else:
-                    # فراخوانی OpenAI API
                     response = openai.ChatCompletion.create(
                         model=model_name,
                         messages=[{"role": "user", "content": prompt}],
@@ -179,9 +182,8 @@ ID: [ID] | STATUS: [MATCH/REJECT] | LINK: https://nextjs.org/docs/app/api-refere
             except Exception as e:
                 print(f"AI Chunk Error: {e}")
             
-            time.sleep(3) # ترمز کوتاه برای دور زدن محدودیت سرعت API
+            time.sleep(3) 
             
-        # حذف ردیف‌های نامرتبط از دیتابیس
         if indexes_to_drop:
             df.drop(index=indexes_to_drop, inplace=True)
             df.reset_index(drop=True, inplace=True)
@@ -211,7 +213,6 @@ if start_btn:
         progress_bar = st.progress(0)
         table_placeholder = st.empty()
         
-        # صف انتظار برای هوش مصنوعی
         ai_verification_queue = []
         
         try:
@@ -273,23 +274,26 @@ if start_btn:
                             try: phone = driver.find_element(By.CSS_SELECTOR, "button[data-tooltip='Copy phone number']").get_attribute("aria-label").replace("Phone:", "").strip()
                             except: pass
                             
-                            emails, socials = "یافت نشد", "یافت نشد"
+                            emails, socials, page_text = "یافت نشد", "یافت نشد", "محتوایی یافت نشد"
                             if web != "ندارد":
                                 driver.switch_to.window(scan_window)
-                                emails, socials = scan_site(driver, web)
+                                emails, socials, page_text = scan_site(driver, web)
                                 
-                            # جستجوی خام لینکدین و ارسال به صف ارزیابی
                             driver.switch_to.window(linkedin_window)
-                            raw_text, fallback, first_url = get_raw_linkedin_search(driver, place["name"])
+                            raw_linkedin, fallback, first_url = get_raw_linkedin_search(driver, place["name"])
                             
                             current_index = len(st.session_state.master_df)
                             if api_key:
                                 linkedin_link = "⏳ در انتظار تحلیل AI..."
+                                
+                                # ترکیب دیتای سایت و لینکدین برای تصمیم‌گیری بهتر هوش مصنوعی
+                                combined_raw_data = f"Website Content:\n{page_text}\n\nLinkedIn Results:\n{raw_linkedin}"
+                                
                                 ai_verification_queue.append({
                                     "index": current_index, 
                                     "query": q, 
                                     "company": place["name"], 
-                                    "raw_results": raw_text, 
+                                    "raw_results": combined_raw_data, 
                                     "fallback": fallback
                                 })
                             else:
@@ -328,28 +332,33 @@ if start_btn:
                             
                         for item in urls_to_scan:
                             emails, socials, phone = "یافت نشد", "یافت نشد", "پیام در لینکدین" if "LinkedIn" in source_mode else "بررسی سایت"
+                            page_text = "محتوایی یافت نشد"
                             
                             driver.switch_to.window(linkedin_window)
-                            raw_text, fallback, first_url = get_raw_linkedin_search(driver, item["title"])
+                            raw_linkedin, fallback, first_url = get_raw_linkedin_search(driver, item["title"])
+                            
+                            if "Web" in source_mode:
+                                driver.switch_to.window(scan_window)
+                                emails, socials, page_text = scan_site(driver, item["url"])
                             
                             current_index = len(st.session_state.master_df)
                             if "LinkedIn" in source_mode or "Web" in source_mode:
                                 if api_key:
                                     linkedin_link = "⏳ در انتظار تحلیل AI..."
+                                    
+                                    # ترکیب دیتای استخراج شده
+                                    combined_raw_data = f"Website Content:\n{page_text}\n\nLinkedIn Results:\n{raw_linkedin}" if "Web" in source_mode else f"Search Title: {item['title']} | URL: {item['url']}\nLinkedIn Results:\n{raw_linkedin}"
+                                    
                                     ai_verification_queue.append({
                                         "index": current_index, 
                                         "query": q, 
                                         "company": item["title"], 
-                                        "raw_results": raw_text if "Web" in source_mode else f"Title: {item['title']} | URL: {item['url']}", 
+                                        "raw_results": combined_raw_data, 
                                         "fallback": fallback
                                     })
                                 else:
                                     linkedin_link = item["url"] if "LinkedIn" in source_mode else (first_url if first_url else fallback)
                             
-                            if "Web" in source_mode:
-                                driver.switch_to.window(scan_window)
-                                emails, socials = scan_site(driver, item["url"])
-                                
                             new_row = {"Name": item["title"], "Details": q, "Source": source_mode.split()[1], "Website": item["url"], "Phone": phone, "Email": emails, "Social Links": socials, "LinkedIn": linkedin_link}
                             st.session_state.master_df = pd.concat([st.session_state.master_df, pd.DataFrame([new_row])], ignore_index=True)
                             table_placeholder.dataframe(st.session_state.master_df, use_container_width=True)
