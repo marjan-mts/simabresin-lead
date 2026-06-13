@@ -77,12 +77,33 @@ def scan_site(driver, url):
     return emails, socials
 
 # --- تابع بررسی دقیق با هوش مصنوعی جمینای ---
+# --- تابع بررسی دقیق با هوش مصنوعی جمینای (نسخه یابنده خودکار مدل) ---
 def verify_with_gemini(company_name, search_results, api_key):
     try:
         import google.generativeai as genai
+        import streamlit as st
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
         
+        # ۱. دریافت لیست تمام مدل‌های رایگانی که برای کلید شما فعال هستند
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if not available_models:
+            st.error("هیچ مدل هوش مصنوعی برای این کلید فعال نیست. لطفاً یک کلید جدید بسازید.")
+            return None
+            
+        # ۲. انتخاب بهترین مدل در دسترس به صورت خودکار
+        best_model = available_models[0].replace('models/', '')
+        for preferred in ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']:
+            if f"models/{preferred}" in available_models:
+                best_model = preferred
+                break
+                
+        model = genai.GenerativeModel(best_model)
+        
+        # ۳. ارسال درخواست به هوش مصنوعی
         prompt = f"""
         Role: B2B Lead Generation Expert.
         Target Company: "{company_name}"
@@ -97,12 +118,12 @@ def verify_with_gemini(company_name, search_results, api_key):
         if "NOT_FOUND" not in result and result.startswith("http"):
             return result
         return None
+        
     except Exception as e:
         import streamlit as st
-        # این خط باعث می‌شود دلیل اصلی کار نکردن هوش مصنوعی را روی صفحه ببینیم
-        st.error(f"خطای جمینای برای {company_name}: {str(e)}")
+        st.error(f"خطای جمینای: {str(e)}")
         return None
-
+        
 # --- تابع جستجوی پروفایل لینکدین شرکت (ترکیب با AI) ---
 def get_linkedin_url(driver, company_name, api_key):
     if not company_name: 
