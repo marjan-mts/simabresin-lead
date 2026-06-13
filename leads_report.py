@@ -80,16 +80,24 @@ def scan_site(driver, url):
 def verify_with_gemini(company_name, search_results, api_key):
     try:
         genai.configure(api_key=api_key)
+        # استفاده از مدل قوی‌تر برای دقت بالاتر
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
-        You are an expert data analyst. I am looking for the official LinkedIn Company page for "{company_name}".
-        Here are the top search results I found:
+        You are a B2B Lead Generation Expert. 
+        Target Company Name: "{company_name}"
+        Search Results to analyze:
         {search_results}
         
-        Task: Analyze the titles and URLs. Which one is the CORRECT official LinkedIn company page for "{company_name}"?
-        If you find a match, reply ONLY with the exact URL (starting with https://). Do not add any other text.
-        If none of the results seem to be the correct company page, reply EXACTLY with the word: NOT_FOUND
+        Instructions:
+        1. Evaluate each result carefully.
+        2. Filter out: Job postings, news articles, personal posts, events, exhibitions, or unrelated organizations (like subways, universities, or schools).
+        3. Identify the URL of the OFFICIAL LinkedIn Company Page for "{company_name}".
+        4. If the title of the result does not strongly match the company name, discard it.
+        5. If you find a valid Company Page URL, output ONLY the URL.
+        6. If no result is a valid LinkedIn Company Page for the target company, output exactly: NOT_FOUND
+        
+        Output only the URL or NOT_FOUND.
         """
         response = model.generate_content(prompt)
         result = response.text.strip()
