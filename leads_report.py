@@ -12,6 +12,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+import google.generativeai as genai
+
 # --- تنظیمات اولیه استریم‌لیت ---
 st.set_page_config(page_title="سیستم تولید سرنخ صادراتی", page_icon="🌍", layout="wide")
 
@@ -22,10 +24,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🌍 سیستم هوشمند استخراج انبوه سرنخ فروش")
+st.title("🌍 سیستم هوشمند استخراج انبوه سرنخ فروش (مجهز به AI)")
 st.info("فایلی حاوی عبارات جستجو آپلود کنید یا جستجوی دستی انجام دهید.")
 
-# افزودن ستون‌ها
 columns = ["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links", "LinkedIn"]
 
 if 'master_df' not in st.session_state:
@@ -34,6 +35,10 @@ if 'master_df' not in st.session_state:
 # --- منوی تنظیمات (سایدبار) ---
 with st.sidebar:
     st.header("⚙️ تنظیمات جستجو")
+    
+    # فیلد جدید برای کلید API جمینای
+    gemini_api_key = "AQ.Ab8RN6KKxGnjwIZ7Zxxt1b3EIfuTdOWQR5ccqeE4u_gjz1OftQ"
+    
     uploaded_file = st.file_uploader("آپلود فایل (Excel/CSV):", type=["xlsx", "csv"])
     manual_query = st.text_input("جستجوی دستی (مثلاً: paint in tehran):", "")
     source_mode = st.radio("منبع استخراج:", ["Google Maps (شرکت‌ها)", "LinkedIn (مدیران/شرکت‌ها)", "Google Web (سایت‌ها)"])
@@ -71,12 +76,37 @@ def scan_site(driver, url):
     except: pass
     return emails, socials
 
-# --- تابع جستجوی پروفایل لینکدین شرکت (با داک‌داک‌گو برای فرار از کپچای سرور ابری) ---
-def get_linkedin_url(driver, company_name):
+# --- تابع بررسی دقیق با هوش مصنوعی جمینای ---
+def verify_with_gemini(company_name, search_results, api_key):
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        You are an expert data analyst. I am looking for the official LinkedIn Company page for "{company_name}".
+        Here are the top search results I found:
+        {search_results}
+        
+        Task: Analyze the titles and URLs. Which one is the CORRECT official LinkedIn company page for "{company_name}"?
+        If you find a match, reply ONLY with the exact URL (starting with https://). Do not add any other text.
+        If none of the results seem to be the correct company page, reply EXACTLY with the word: NOT_FOUND
+        """
+        response = model.generate_content(prompt)
+        result = response.text.strip()
+        
+        if "NOT_FOUND" not in result and result.startswith("http"):
+            return result
+        return None
+    except Exception as e:
+        return None
+
+# --- تابع جستجوی پروفایل لینکدین شرکت (ترکیب با AI) ---
+def get_linkedin_url(driver, company_name, api_key):
     if not company_name: 
         return "یافت نشد"
         
     clean_name = company_name.replace("Co.", "").replace("Ltd.", "").replace("Inc.", "").strip()
+    fallback_link = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(clean_name)}"
     
     try:
         dork = f'{clean_name} site:linkedin.com/company'
@@ -84,17 +114,35 @@ def get_linkedin_url(driver, company_name):
         time.sleep(2) 
         
         links = driver.find_elements(By.TAG_NAME, "a")
+        found_results = []
+        
+        # استخراج 5 نتیجه اول برای بررسی
         for a in links:
             try:
                 href = a.get_attribute("href")
-                if href and "linkedin.com/company/" in href:
-                    if "uddg=" in href:
-                        return unquote(href.split("uddg=")[1].split("&")[0])
-                    return href
+                title = a.text
+                if href and "linkedin.com/company/" in href and "uddg=" in href:
+                    actual_url = unquote(href.split("uddg=")[1].split("&")[0])
+                    found_results.append(f"Title: {title} | URL: {actual_url}")
+                    if len(found_results) >= 5: break
             except: continue
+            
+        if not found_results:
+            return fallback_link
+            
+        # اگر کلید API وارد شده بود، بده جمینای چک کنه
+        if api_key:
+            results_text = "\n".join(found_results)
+            verified_url = verify_with_gemini(clean_name, results_text, api_key)
+            if verified_url:
+                return verified_url
+            else:
+                return fallback_link
+        else:
+            # اگر کلید نبود، همون اولین نتیجه رو برگردون (مثل قبل)
+            return found_results[0].split("URL: ")[1]
+            
     except: pass
-    
-    fallback_link = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(clean_name)}"
     return fallback_link
 
 # --- منطق اصلی اجرای ربات ---
@@ -120,7 +168,6 @@ if start_btn:
         try:
             status.info("در حال آماده‌سازی سرور و مرورگر ابری...")
             
-            # --- تنظیمات ضروری برای اجرای روی سرور ابری گیت‌هاب/استریم‌لیت ---
             options = webdriver.ChromeOptions()
             options.add_argument("--headless=new") 
             options.add_argument("--no-sandbox")
@@ -146,7 +193,6 @@ if start_btn:
                 status.info(f"🔎 پردازش عبارت {idx+1} از {total_queries}: **{q}**")
                 processed_links = set()
                 
-                # --- استخراج از Google Maps ---
                 if "Maps" in source_mode:
                     driver.switch_to.window(main_window)
                     driver.get(f"https://www.google.com/maps/search/{quote_plus(q)}?hl=en")
@@ -188,9 +234,9 @@ if start_btn:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
                                 
-                            # جستجوی لینکدین در پس‌زمینه بدون کپچا
+                            # جستجوی لینکدین مجهز به هوش مصنوعی
                             driver.switch_to.window(linkedin_window)
-                            linkedin_link = get_linkedin_url(driver, place["name"])
+                            linkedin_link = get_linkedin_url(driver, place["name"], gemini_api_key)
                             
                             new_row = {"Name": place["name"], "Details": q, "Source": "Google Maps", "Website": web, "Phone": phone, "Email": emails, "Social Links": socials, "LinkedIn": linkedin_link}
                             st.session_state.master_df = pd.concat([st.session_state.master_df, pd.DataFrame([new_row])], ignore_index=True)
@@ -199,7 +245,6 @@ if start_btn:
                     except Exception as e:
                         print(f"Maps Skip/Error: {e}")
                         
-                # --- استخراج از LinkedIn / Web ---
                 else:
                     pages_to_scan = max(1, int(depth / 10))
                     for page in range(pages_to_scan):
@@ -230,7 +275,16 @@ if start_btn:
                             
                         for item in urls_to_scan:
                             emails, socials, phone = "یافت نشد", "یافت نشد", "پیام در لینکدین" if "LinkedIn" in source_mode else "بررسی سایت"
-                            linkedin_link = item["url"] if "LinkedIn" in source_mode else "بررسی شود"
+                            
+                            if "LinkedIn" in source_mode:
+                                # اگر داریم لینکدین سرچ میکنیم، بده جمینای چک کنه که پرت نباشه
+                                if gemini_api_key:
+                                    verified = verify_with_gemini(item["title"], f"Title: {item['title']} | URL: {item['url']}", gemini_api_key)
+                                    linkedin_link = verified if verified else "نیاز به بررسی دستی"
+                                else:
+                                    linkedin_link = item["url"]
+                            else:
+                                linkedin_link = "بررسی شود"
                             
                             if "Web" in source_mode:
                                 driver.switch_to.window(scan_window)
@@ -242,12 +296,11 @@ if start_btn:
 
             progress_bar.progress(1.0)
             driver.quit()
-            status.success("✅ عملیات استخراج انبوه با موفقیت در سرور ابری انجام شد!")
+            status.success("✅ استخراج هوشمند و اعتبارسنجی با موفقیت انجام شد!")
             
         except Exception as e:
-            status.error(f"خطای سیستمی رخ داد (لطفاً بررسی کنید پکیج‌ها نصب باشند): {e}")
+            status.error(f"خطای سیستمی رخ داد: {e}")
 
-# --- نمایش جدول نهایی و خروجی ---
 if not st.session_state.master_df.empty:
     st.divider()
     st.subheader("📊 دیتابیس استخراج شده")
@@ -258,7 +311,7 @@ if not st.session_state.master_df.empty:
     st.download_button(
         label="📥 دانلود دیتابیس اکسل", 
         data=towrite.getvalue(), 
-        file_name="Lead_Gen_Export_Final.xlsx", 
+        file_name="Lead_Gen_AI_Export.xlsx", 
         mime="application/vnd.ms-excel", 
         type="primary"
     )
