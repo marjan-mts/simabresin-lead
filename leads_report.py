@@ -52,7 +52,7 @@ with st.sidebar:
         st.session_state.master_df = pd.DataFrame(columns=columns)
         st.rerun()
 
-# --- تابع اسکن هوشمند سایت‌ها (تغییر یافته برای خواندن متن سایت) ---
+# --- تابع اسکن هوشمند سایت‌ها (با قابلیت خواندن متن) ---
 def scan_site(driver, url):
     emails, socials, page_text = "یافت نشد", "یافت نشد", "محتوایی یافت نشد"
     if not url or url == "ندارد" or "linkedin.com" in url or "google.com" in url: 
@@ -66,7 +66,7 @@ def scan_site(driver, url):
         # استخراج متن سایت برای هوش مصنوعی
         try:
             body_element = driver.find_element(By.TAG_NAME, "body")
-            page_text = body_element.text[:1000].replace('\n', ' ') # هزار کاراکتر اول برای فهمیدن زمینه کاری کافیست
+            page_text = body_element.text[:1000].replace('\n', ' ') 
         except:
             page_text = "متن سایت قابل استخراج نبود."
         
@@ -114,7 +114,7 @@ def get_raw_linkedin_search(driver, company_name):
         return "\n".join(found_results), fallback_link, first_url
     except: return "", fallback_link, ""
 
-# --- پردازش دسته‌ای و ارزیابی هوشمند (Batch & Evaluate) ---
+# --- پردازش دسته‌ای و ارزیابی هوشمند (با مدیریت خطا) ---
 def batch_verify_with_ai(df, queue, api_key, provider, model_name, status_element):
     if not api_key:
         return df
@@ -180,7 +180,14 @@ ID: [ID] | STATUS: [MATCH/REJECT] | LINK: https://nextjs.org/docs/app/api-refere
                                     df.at[item_id, 'LinkedIn'] = url
                         except: pass
             except Exception as e:
-                print(f"AI Chunk Error: {e}")
+                # نمایش خطا روی صفحه
+                st.warning(f"⚠️ خطا در تحلیل گروه {(i//chunk_size)+1}: {e}")
+            
+            # --- سیستم ایمنی جدید ---
+            # اگر ردیفی روی حالت "ساعت شنی" گیر کرده بود، لینک خام جایگزین شود
+            for item in chunk:
+                if df.at[item['index'], 'LinkedIn'] == "⏳ در انتظار تحلیل AI...":
+                    df.at[item['index'], 'LinkedIn'] = item['fallback']
             
             time.sleep(3) 
             
@@ -286,7 +293,6 @@ if start_btn:
                             if api_key:
                                 linkedin_link = "⏳ در انتظار تحلیل AI..."
                                 
-                                # ترکیب دیتای سایت و لینکدین برای تصمیم‌گیری بهتر هوش مصنوعی
                                 combined_raw_data = f"Website Content:\n{page_text}\n\nLinkedIn Results:\n{raw_linkedin}"
                                 
                                 ai_verification_queue.append({
@@ -346,7 +352,6 @@ if start_btn:
                                 if api_key:
                                     linkedin_link = "⏳ در انتظار تحلیل AI..."
                                     
-                                    # ترکیب دیتای استخراج شده
                                     combined_raw_data = f"Website Content:\n{page_text}\n\nLinkedIn Results:\n{raw_linkedin}" if "Web" in source_mode else f"Search Title: {item['title']} | URL: {item['url']}\nLinkedIn Results:\n{raw_linkedin}"
                                     
                                     ai_verification_queue.append({
