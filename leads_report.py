@@ -242,7 +242,7 @@ if start_btn:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
                                 
-                            # جستجوی لینکدین مجهز به هوش مصنوعی
+                            # جستجوی لینکدین مجهز به هوش مصنوعی (برای Maps)
                             driver.switch_to.window(linkedin_window)
                             linkedin_link = get_linkedin_url(driver, place["name"], gemini_api_key)
                             
@@ -284,15 +284,16 @@ if start_btn:
                         for item in urls_to_scan:
                             emails, socials, phone = "یافت نشد", "یافت نشد", "پیام در لینکدین" if "LinkedIn" in source_mode else "بررسی سایت"
                             
+                            # جستجوی لینکدین مجهز به هوش مصنوعی (برای Web و LinkedIn)
                             if "LinkedIn" in source_mode:
-                                # اگر داریم لینکدین سرچ میکنیم، بده جمینای چک کنه که پرت نباشه
                                 if gemini_api_key:
                                     verified = verify_with_gemini(item["title"], f"Title: {item['title']} | URL: {item['url']}", gemini_api_key)
                                     linkedin_link = verified if verified else "نیاز به بررسی دستی"
                                 else:
                                     linkedin_link = item["url"]
-                            else:
-                                linkedin_link = "بررسی شود"
+                            else: # اگر حالت Google Web باشد
+                                driver.switch_to.window(linkedin_window)
+                                linkedin_link = get_linkedin_url(driver, item["title"], gemini_api_key)
                             
                             if "Web" in source_mode:
                                 driver.switch_to.window(scan_window)
