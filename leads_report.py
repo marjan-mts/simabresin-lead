@@ -22,7 +22,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🌍 سیستم هوشمند استخراج انبوه سرنخ فروش (AI-Batch)")
+st.title("🌍 سیستم هوشمند استخراج و ارزیابی سرنخ فروش (AI-Batch)")
 st.info("فایلی حاوی عبارات جستجو آپلود کنید یا جستجوی دستی انجام دهید.")
 
 columns = ["Name", "Details", "Source", "Website", "Phone", "Email", "Social Links", "LinkedIn"]
@@ -32,10 +32,19 @@ if 'master_df' not in st.session_state:
 
 # --- منوی تنظیمات (سایدبار) ---
 with st.sidebar:
-    st.header("⚙️ تنظیمات جستجو")
-    gemini_api_key = st.text_input("🔑 Gemini API Key (برای دقت ۱۰۰٪):", type="password")
+    st.header("⚙️ تنظیمات جستجو و هوش مصنوعی")
+    
+    # انتخاب ارائه‌دهنده و مدل
+    ai_provider = st.selectbox("🤖 موتور هوش مصنوعی:", ["Google Gemini", "OpenAI (ChatGPT)"])
+    if ai_provider == "Google Gemini":
+        ai_model = st.selectbox("نسخه مدل:", ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"])
+        api_key = st.text_input("🔑 Gemini API Key:", type="password")
+    else:
+        ai_model = st.selectbox("نسخه مدل:", ["gpt-3.5-turbo", "gpt-4o"])
+        api_key = st.text_input("🔑 OpenAI API Key:", type="password")
+
     uploaded_file = st.file_uploader("آپلود فایل (Excel/CSV):", type=["xlsx", "csv"])
-    manual_query = st.text_input("جستجوی دستی (مثلاً: paint in tehran):", "")
+    manual_query = st.text_input("جستجوی دستی (مثلاً: paint manufacturers in tehran):", "")
     source_mode = st.radio("منبع استخراج:", ["Google Maps (شرکت‌ها)", "LinkedIn (مدیران/شرکت‌ها)", "Google Web (سایت‌ها)"])
     depth = st.slider("تعداد نتایج در هر عبارت:", 5, 100, 10)
     start_btn = st.button("🚀 شروع استخراج", type="primary")
@@ -70,7 +79,7 @@ def scan_site(driver, url):
     except: pass
     return emails, socials
 
-# --- تابع دریافت خام اطلاعات جستجو (بدون درگیری لحظه‌ای با هوش مصنوعی) ---
+# --- تابع دریافت خام اطلاعات جستجو ---
 def get_raw_linkedin_search(driver, company_name):
     if not company_name: return "", "", ""
     clean_name = company_name.replace("Co.", "").replace("Ltd.", "").replace("Inc.", "").strip()
@@ -99,70 +108,89 @@ def get_raw_linkedin_search(driver, company_name):
         return "\n".join(found_results), fallback_link, first_url
     except: return "", fallback_link, ""
 
-# --- پردازش دسته‌ای (Batch) با هوش مصنوعی ---
-def batch_verify_with_gemini(df, queue, api_key, status_element):
+# --- پردازش دسته‌ای و ارزیابی هوشمند (Batch & Evaluate) ---
+def batch_verify_with_ai(df, queue, api_key, provider, model_name, status_element):
+    if not api_key:
+        return df
+
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+        if provider == "Google Gemini":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name)
+        elif provider == "OpenAI (ChatGPT)":
+            # نیاز به اضافه شدن پکیج openai به فایل requirements.txt دارد
+            import openai
+            openai.api_key = api_key
         
-        # پیدا کردن بهترین مدل فعال
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        if not available_models: return
-            
-        best_model = available_models[0].replace('models/', '')
-        for preferred in ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-2.5-flash']:
-            if f"models/{preferred}" in available_models:
-                best_model = preferred
-                break
-                
-        model = genai.GenerativeModel(best_model)
-        
-        # پردازش گروه‌های ۵ تایی برای دقت بالا و جلوگیری از خطای طول متن
         chunk_size = 5
         total_chunks = (len(queue) + chunk_size - 1) // chunk_size
         
+        # لیستی برای نگهداری ایندکس‌هایی که باید حذف شوند (شرکت‌های نامرتبط)
+        indexes_to_drop = []
+        
         for i in range(0, len(queue), chunk_size):
             chunk = queue[i:i+chunk_size]
-            status_element.info(f"🤖 در حال تحلیل دسته‌ای لینک‌ها با هوش مصنوعی... (گروه {(i//chunk_size)+1} از {total_chunks})")
+            status_element.info(f"🤖 در حال ارزیابی تخصصی شرکت‌ها... (گروه {(i//chunk_size)+1} از {total_chunks})")
             
-            prompt = "Role: B2B Lead Generation Expert.\nFind the OFFICIAL LinkedIn Company Page URL for the following companies based on the search results provided.\n\n"
+            prompt = """Role: B2B Lead Generation & Market Research Expert.
+Your task is to EVALUATE if the found companies actually match the user's TARGET INDUSTRY.
+
+Instructions:
+1. Review each company's raw extracted text against the TARGET INDUSTRY.
+2. If the company is clearly irrelevant (e.g., Target is 'Paint manufacturing' but the company is 'Subway station' or a random news site), you MUST output REJECT.
+3. If the company is relevant, extract their best OFFICIAL Link (Website or LinkedIn).
+4. Output EXACTLY in this format line by line:
+ID: [ID] | STATUS: [MATCH/REJECT] | LINK: https://nextjs.org/docs/app/api-reference/functions/not-found
+"""
             for item in chunk:
-                prompt += f"ID:{item['index']}\nCompany:{item['company']}\nResults:\n{item['raw_results']}\n---\n"
-            
-            prompt += """
-            Instructions:
-            1. For each ID, output the OFFICIAL LinkedIn Company Page URL.
-            2. Discard job postings, news, personal profiles, unrelated entities like subways or events.
-            3. Output format must be EXACTLY line by line as follows:
-            ID: [ID] | [URL or NOT_FOUND]
-            (Do not add any extra text or markdown formatting)
-            """
+                prompt += f"\n---\nID: {item['index']}\nTARGET INDUSTRY/QUERY: {item['query']}\nCOMPANY NAME: {item['company']}\nRAW TEXT/SNIPPET: {item['raw_results']}\n"
             
             try:
-                response = model.generate_content(prompt)
-                lines = response.text.strip().split('\n')
+                if provider == "Google Gemini":
+                    response = model.generate_content(prompt)
+                    lines = response.text.strip().split('\n')
+                else:
+                    # فراخوانی OpenAI API
+                    response = openai.ChatCompletion.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1
+                    )
+                    lines = response.choices[0].message.content.strip().split('\n')
+                
                 for line in lines:
                     if "|" in line and "ID:" in line:
-                        parts = line.split("|")
+                        parts = [p.strip() for p in line.split("|")]
                         try:
                             item_id = int(parts[0].replace("ID:", "").strip())
-                            url = parts[1].strip()
+                            status = parts[1].replace("STATUS:", "").strip()
+                            url = parts[2].replace("LINK:", "").strip()
                             
-                            if "NOT_FOUND" in url or not url.startswith("http"):
-                                fallback = next(x['fallback'] for x in chunk if x['index'] == item_id)
-                                df.at[item_id, 'LinkedIn'] = fallback
+                            if status == "REJECT":
+                                indexes_to_drop.append(item_id)
                             else:
-                                df.at[item_id, 'LinkedIn'] = url
+                                if "NOT_FOUND" in url or not url.startswith("http"):
+                                    fallback = next(x['fallback'] for x in chunk if x['index'] == item_id)
+                                    df.at[item_id, 'LinkedIn'] = fallback
+                                else:
+                                    df.at[item_id, 'LinkedIn'] = url
                         except: pass
             except Exception as e:
                 print(f"AI Chunk Error: {e}")
-                for item in chunk:
-                    df.at[item['index'], 'LinkedIn'] = item['fallback']
             
-            time.sleep(3) # ترمز کوتاه بین هر درخواست برای دور زدن محدودیت سرعت
+            time.sleep(3) # ترمز کوتاه برای دور زدن محدودیت سرعت API
+            
+        # حذف ردیف‌های نامرتبط از دیتابیس
+        if indexes_to_drop:
+            df.drop(index=indexes_to_drop, inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            status_element.success(f"🧹 تعداد {len(indexes_to_drop)} شرکت نامرتبط با موفقیت فیلتر و حذف شدند.")
             
     except Exception as e:
-        st.error(f"خطای کلی در پردازش هوش مصنوعی: {e}")
+        st.error(f"خطای کلی در ارزیابی هوش مصنوعی: {e}")
+        
+    return df
 
 # --- منطق اصلی اجرای ربات ---
 if start_btn:
@@ -250,14 +278,20 @@ if start_btn:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
                                 
-                            # جستجوی خام لینکدین و ارسال به صف
+                            # جستجوی خام لینکدین و ارسال به صف ارزیابی
                             driver.switch_to.window(linkedin_window)
                             raw_text, fallback, first_url = get_raw_linkedin_search(driver, place["name"])
                             
                             current_index = len(st.session_state.master_df)
-                            if gemini_api_key:
+                            if api_key:
                                 linkedin_link = "⏳ در انتظار تحلیل AI..."
-                                ai_verification_queue.append({"index": current_index, "company": place["name"], "raw_results": raw_text, "fallback": fallback})
+                                ai_verification_queue.append({
+                                    "index": current_index, 
+                                    "query": q, 
+                                    "company": place["name"], 
+                                    "raw_results": raw_text, 
+                                    "fallback": fallback
+                                })
                             else:
                                 linkedin_link = first_url if first_url else fallback
                                 
@@ -300,9 +334,15 @@ if start_btn:
                             
                             current_index = len(st.session_state.master_df)
                             if "LinkedIn" in source_mode or "Web" in source_mode:
-                                if gemini_api_key:
+                                if api_key:
                                     linkedin_link = "⏳ در انتظار تحلیل AI..."
-                                    ai_verification_queue.append({"index": current_index, "company": item["title"], "raw_results": raw_text if "Web" in source_mode else f"Title: {item['title']} | URL: {item['url']}", "fallback": fallback})
+                                    ai_verification_queue.append({
+                                        "index": current_index, 
+                                        "query": q, 
+                                        "company": item["title"], 
+                                        "raw_results": raw_text if "Web" in source_mode else f"Title: {item['title']} | URL: {item['url']}", 
+                                        "fallback": fallback
+                                    })
                                 else:
                                     linkedin_link = item["url"] if "LinkedIn" in source_mode else (first_url if first_url else fallback)
                             
@@ -317,19 +357,26 @@ if start_btn:
             progress_bar.progress(1.0)
             driver.quit()
             
-            # --- اجرای پردازش نهایی و دسته‌ای هوش مصنوعی ---
-            if gemini_api_key and ai_verification_queue:
-                batch_verify_with_gemini(st.session_state.master_df, ai_verification_queue, gemini_api_key, status)
+            # --- اجرای پردازش نهایی و ارزیابی هوش مصنوعی ---
+            if api_key and ai_verification_queue:
+                st.session_state.master_df = batch_verify_with_ai(
+                    st.session_state.master_df, 
+                    ai_verification_queue, 
+                    api_key, 
+                    ai_provider, 
+                    ai_model, 
+                    status
+                )
                 table_placeholder.dataframe(st.session_state.master_df, use_container_width=True)
             
-            status.success("✅ عملیات استخراج و اعتبارسنجی هوشمند با موفقیت به پایان رسید!")
+            status.success("✅ عملیات استخراج و ارزیابی هوشمند با موفقیت به پایان رسید!")
             
         except Exception as e:
             status.error(f"خطای سیستمی رخ داد: {e}")
 
 if not st.session_state.master_df.empty:
     st.divider()
-    st.subheader("📊 دیتابیس استخراج شده")
+    st.subheader("📊 دیتابیس استخراج شده (فیلتر شده)")
     st.dataframe(st.session_state.master_df, use_container_width=True)
     
     towrite = io.BytesIO()
