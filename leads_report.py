@@ -71,7 +71,7 @@ def scan_site(driver, url):
     except: pass
     return emails, socials
 
-# --- تابع جستجوی پروفایل لینکدین شرکت (ارتقا یافته با DuckDuckGo) ---
+# --- تابع جستجوی پروفایل لینکدین شرکت (با داک‌داک‌گو برای فرار از کپچای سرور ابری) ---
 def get_linkedin_url(driver, company_name):
     if not company_name: 
         return "یافت نشد"
@@ -79,7 +79,6 @@ def get_linkedin_url(driver, company_name):
     clean_name = company_name.replace("Co.", "").replace("Ltd.", "").replace("Inc.", "").strip()
     
     try:
-        # استفاده از داک‌داک‌گو برای دور زدن کپچای گوگل
         dork = f'{clean_name} site:linkedin.com/company'
         driver.get(f"https://html.duckduckgo.com/html/?q={quote_plus(dork)}")
         time.sleep(2) 
@@ -95,7 +94,6 @@ def get_linkedin_url(driver, company_name):
             except: continue
     except: pass
     
-    # سیستم جایگزین: ساخت لینک جستجوی مستقیم در لینکدین
     fallback_link = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(clean_name)}"
     return fallback_link
 
@@ -122,6 +120,7 @@ if start_btn:
         try:
             status.info("در حال آماده‌سازی سرور و مرورگر ابری...")
             
+            # --- تنظیمات ضروری برای اجرای روی سرور ابری گیت‌هاب/استریم‌لیت ---
             options = webdriver.ChromeOptions()
             options.add_argument("--headless=new") 
             options.add_argument("--no-sandbox")
@@ -189,7 +188,7 @@ if start_btn:
                                 driver.switch_to.window(scan_window)
                                 emails, socials = scan_site(driver, web)
                                 
-                            # جستجوی لینکدین
+                            # جستجوی لینکدین در پس‌زمینه بدون کپچا
                             driver.switch_to.window(linkedin_window)
                             linkedin_link = get_linkedin_url(driver, place["name"])
                             
@@ -209,7 +208,6 @@ if start_btn:
                         target = "linkedin.com" if "LinkedIn" in source_mode else ""
                         dork = f"{q} site:{target}" if target else q
                         
-                        # در حالت وب/لینکدین هم از داک‌داک‌گو برای فرار از کپچا استفاده می‌کنیم
                         driver.get(f"https://html.duckduckgo.com/html/?q={quote_plus(dork)}&s={start}")
                         time.sleep(3)
                         
@@ -260,7 +258,7 @@ if not st.session_state.master_df.empty:
     st.download_button(
         label="📥 دانلود دیتابیس اکسل", 
         data=towrite.getvalue(), 
-        file_name="Lead_Gen_Export.xlsx", 
+        file_name="Lead_Gen_Export_Final.xlsx", 
         mime="application/vnd.ms-excel", 
         type="primary"
     )
